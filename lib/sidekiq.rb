@@ -3,6 +3,7 @@ require 'sidekiq/logging'
 require 'sidekiq/client'
 require 'sidekiq/worker'
 require 'sidekiq/redis_connection'
+require 'sidekiq/sqs_connection'
 require 'sidekiq/util'
 
 require 'sidekiq/extensions/action_mailer'
@@ -70,6 +71,22 @@ module Sidekiq
       @redis = hash
     else
       raise ArgumentError, "redis= requires a Hash or ConnectionPool"
+    end
+  end
+
+  def self.sqs(&block)
+    @sqs ||= Sidekiq::SQSConnection.create
+    raise ArgumentError, "requires a block" if !block
+    block.call(@sqs)
+  end
+
+  def self.sqs=(hash)
+    if hash.is_a?(Hash)
+      @sqs = Sidekiq::SQSConnection.create(hash)
+    elsif hash.is_a?(ConnectionPool)
+      @sqs = hash
+    else
+      raise ArgumentError, "sqs= requires a Hash or ConnectionPool"
     end
   end
 

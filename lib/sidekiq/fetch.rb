@@ -16,6 +16,10 @@ module Sidekiq
       @mgr = mgr
       @queues = queues.map { |q| "queue:#{q}" }
       @unique_queues = @queues.uniq
+
+      # TODO: support multiple queues
+      @queue = Sidekiq.sqs { |sqs| sqs.queues.named(queues.first) }
+      puts @queue.inspect
     end
 
     # Fetching is straightforward: the Manager makes a fetch
@@ -30,16 +34,14 @@ module Sidekiq
       watchdog('Fetcher#fetch died') do
         return if Sidekiq::Fetcher.done?
 
-        begin
-          queue = nil
-          msg = nil
-          Sidekiq.redis { |conn| queue, msg = conn.blpop(*queues_cmd) }
-
-          if msg
-            @mgr.assign!(msg, queue.gsub(/.*queue:/, ''))
-          else
-            after(0) { fetch }
+        begin  
+          @queue.poll(:batch_size => 1, :poll_interval => 0) do |msg|
+            puts "fetched #{msg.inspect}"
+            @mgr.assign!(msg)
           end
+          
+          # Use Celluloid's sleep instead of letting #poll do a Kernel sleep
+          sleep 5
         rescue => ex
           logger.error("Error fetching message: #{ex}")
           logger.error(ex.backtrace.first)
@@ -60,17 +62,5 @@ module Sidekiq
       @done
     end
 
-    private
-
-    # Creating the Redis#blpop command takes into account any
-    # configured queue weights. By default Redis#blpop returns
-    # data from the first queue that has pending elements. We
-    # recreate the queue command each time we invoke Redis#blpop
-    # to honor weights and avoid queue starvation.
-    def queues_cmd
-      queues = @queues.sample(@unique_queues.size).uniq
-      queues.concat(@unique_queues - queues)
-      queues << TIMEOUT
-    end
   end
 end

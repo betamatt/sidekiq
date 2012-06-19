@@ -96,21 +96,20 @@ module Sidekiq
       end
     end
 
-    def assign(msg, queue)
+    def assign(msg)
+      puts "assigned"
       watchdog("Manager#assign died") do
         if stopped?
           # Race condition between Manager#stop if Fetcher
-          # is blocked on redis and gets a message after
+          # is blocked and gets a message after
           # all the ready Processors have been stopped.
-          # Push the message back to redis.
-          Sidekiq.redis do |conn|
-            conn.lpush("queue:#{queue}", msg)
-          end
+          # Mark the message as available for other workers.
+          #msg.visibility_timeout = 0
         else
           processor = @ready.pop
-          @in_progress[processor.object_id] = [msg, queue]
+          @in_progress[processor.object_id] = [msg, msg.queue.url]
           @busy << processor
-          processor.process!(Sidekiq.load_json(msg), queue)
+          processor.process!(msg)
         end
       end
     end
@@ -129,8 +128,8 @@ module Sidekiq
               # processor is an actor proxy and we can't call any methods
               # that would go to the actor (since it's busy).  Instead
               # we'll use the object_id to track the worker's data here.
-              msg, queue = @in_progress[processor.object_id]
-              conn.lpush("queue:#{queue}", msg)
+              msg = @in_progress[processor.object_id]
+              #msg.visibility_timeout = 0
             end
           end
           logger.info("Pushed #{@busy.size} messages back to Redis")

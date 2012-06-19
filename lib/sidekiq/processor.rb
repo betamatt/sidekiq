@@ -30,8 +30,10 @@ module Sidekiq
       @boss = boss
     end
 
-    def process(msg, queue)
-      klass  = constantize(msg['class'])
+    def process(msg)
+    # Exceptions encountered here seem to vanish      
+      payload = MultiJson.decode(msg.body)
+      klass  = constantize(payload['class'])
       worker = klass.new
 
       # Celluloid actor calls are performed within a Fiber.
@@ -39,13 +41,17 @@ module Sidekiq
       # so we use Celluloid's defer to run things in a thread pool
       # in order to get a full-sized stack for the Worker.
       defer do
-        stats(worker, msg, queue) do
-          Sidekiq.server_middleware.invoke(worker, msg, queue) do
-            worker.perform(*msg['args'])
+        puts "A"
+        stats(worker, msg) do
+          puts "B"
+          Sidekiq.server_middleware.invoke(worker, payload, queue) do
+            worker.perform(*payload['args'])
           end
         end
       end
       @boss.processor_done!(current_actor)
+    rescue => e
+      puts e.inspect
     end
 
     # See http://github.com/tarcieri/celluloid/issues/22
@@ -59,12 +65,12 @@ module Sidekiq
 
     private
 
-    def stats(worker, msg, queue)
+    def stats(worker, msg)
       redis do |conn|
         conn.multi do
           conn.sadd('workers', self)
           conn.setex("worker:#{self}:started", EXPIRY, Time.now.to_s)
-          hash = {:queue => queue, :payload => msg, :run_at => Time.now.strftime("%Y/%m/%d %H:%M:%S %Z")}
+          hash = {:queue => msg.queue.url, :payload => msg.body, :run_at => Time.now.strftime("%Y/%m/%d %H:%M:%S %Z")}
           conn.setex("worker:#{self}", EXPIRY, Sidekiq.dump_json(hash))
         end
       end

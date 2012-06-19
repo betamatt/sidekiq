@@ -35,6 +35,7 @@ module Sidekiq
         include Sidekiq::Util
 
         # delayed_job uses the same basic formula
+        # TODO: will have to tune this to fit in SQS 900s cap
         MAX_COUNT = 25
         DELAY = proc { |count| (count ** 4) + 15 }
 
@@ -43,7 +44,6 @@ module Sidekiq
         rescue => e
           raise unless msg['retry']
 
-          msg['queue'] = queue
           msg['error_message'] = e.message
           msg['error_class'] = e.class.name
           count = if msg['retry_count']
@@ -63,11 +63,8 @@ module Sidekiq
           if count <= MAX_COUNT
             delay = DELAY.call(count)
             logger.debug { "Failure! Retry #{count} in #{delay} seconds" }
-            retry_at = Time.now.to_f + delay
             payload = Sidekiq.dump_json(msg)
-            Sidekiq.redis do |conn|
-              conn.zadd('retry', retry_at.to_s, payload)
-            end
+            queue.send_message payload, :delay_seconds => delay
           else
             # Goodbye dear message, you (re)tried your best I'm sure.
             logger.debug { "Dropping message after hitting the retry maximum: #{msg}" }
