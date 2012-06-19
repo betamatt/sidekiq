@@ -19,6 +19,8 @@ module Sidekiq
 
       # TODO: support multiple queues
       @queue = Sidekiq.sqs { |sqs| sqs.queues.named(queues.first) }
+
+      @buffer = []
     end
 
     # Fetching is straightforward: the Manager makes a fetch
@@ -33,24 +35,28 @@ module Sidekiq
       watchdog('Fetcher#fetch died') do
         return if Sidekiq::Fetcher.done?
 
-        begin 
-          received = false 
-          # Simulate a blocking receive
-          while (!received) do
-            @queue.receive_message(:limit => 1) do |msg|
-              received = true
-              @mgr.assign!(msg)
+        if @buffer.empty?          
+          begin 
+            received = false 
+            # Simulate a blocking receive
+            while (!received) do
+              @queue.receive_message(:limit => 10) do |msg|
+                received = true
+                @buffer << msg
+              end
+            
+              # pause before fetching again
+              sleep 5 unless received
             end
-          
-            # pause before fetching again
-            sleep 5 unless received
+          rescue => ex
+            logger.error("Error fetching message: #{ex}")
+            logger.error(ex.backtrace.first)
+            sleep(TIMEOUT)
+            after(0) { fetch }
           end
-        rescue => ex
-          logger.error("Error fetching message: #{ex}")
-          logger.error(ex.backtrace.first)
-          sleep(TIMEOUT)
-          after(0) { fetch }
         end
+
+        @mgr.assign!(@buffer.pop)
       end
     end
 
