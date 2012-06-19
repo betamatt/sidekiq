@@ -97,7 +97,6 @@ module Sidekiq
     end
 
     def assign(msg)
-      puts "assigned"
       watchdog("Manager#assign died") do
         if stopped?
           # Race condition between Manager#stop if Fetcher

@@ -41,10 +41,8 @@ module Sidekiq
       # so we use Celluloid's defer to run things in a thread pool
       # in order to get a full-sized stack for the Worker.
       defer do
-        puts "A"
         stats(worker, msg) do
-          puts "B"
-          Sidekiq.server_middleware.invoke(worker, payload, queue) do
+          Sidekiq.server_middleware.invoke(worker, payload, msg.queue) do
             worker.perform(*payload['args'])
           end
         end
