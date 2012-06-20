@@ -10,7 +10,8 @@ module Sidekiq
     include Celluloid
     include Sidekiq::Util
 
-    TIMEOUT = 1
+    TIMEOUT = 5
+    BATCH = 10
 
     def initialize(mgr, queues)
       @mgr = mgr
@@ -35,18 +36,21 @@ module Sidekiq
       watchdog('Fetcher#fetch died') do
         return if Sidekiq::Fetcher.done?
 
-        if @buffer.empty?          
+        if fetch_required?  
           begin 
-            received = false 
-            # Simulate a blocking receive
-            while (!received) do
-              @queue.receive_message(:limit => 10) do |msg|
-                received = true
-                @buffer << msg
-              end
+            # Simulate a blocking receive by continually rescheduling until data is received
+            received = false          
+            @queue.receive_message(:limit => BATCH) do |msg|
+              received = true
+              @buffer << msg
+            end
             
+            if received
+              @mgr.assign!(@buffer.pop)
+            else
               # pause before fetching again
-              sleep 5 unless received
+              sleep(TIMEOUT)
+              after(0) { fetch }
             end
           rescue => ex
             logger.error("Error fetching message: #{ex}")
@@ -54,10 +58,14 @@ module Sidekiq
             sleep(TIMEOUT)
             after(0) { fetch }
           end
+        else
+          @mgr.assign!(@buffer.pop)
         end
-
-        @mgr.assign!(@buffer.pop)
       end
+    end
+
+    def fetch_required?
+      @buffer.size < 2 * BATCH 
     end
 
     # Ugh.  Say hello to a bloody hack.
