@@ -36,36 +36,41 @@ module Sidekiq
       watchdog('Fetcher#fetch died') do
         return if Sidekiq::Fetcher.done?
 
+        # If there's a message already buffered, ask the manager to assign it
+        # before fetching new jobs
+        assigned = false
+        if !@buffer.empty?
+          assigned = true
+          @mgr.assign!(@buffer.pop)
+        end
+
+        # Fetch messages. If none can be retrieved, recschedule another fetch unless a message was already
+        # assigned to the processor.
         if fetch_required?  
           begin 
-            # Simulate a blocking receive by continually rescheduling until data is received
-            received = false          
+            received = false
             @queue.receive_message(:limit => BATCH) do |msg|
               received = true
               @buffer << msg
             end
-            
-            if received
-              @mgr.assign!(@buffer.pop)
-            else
-              # pause before fetching again
-              sleep(TIMEOUT)
-              after(0) { fetch }
-            end
+
+            refetch if !received && !assigned
           rescue => ex
             logger.error("Error fetching message: #{ex}")
             logger.error(ex.backtrace.first)
-            sleep(TIMEOUT)
-            after(0) { fetch }
+            refetch if !assigned
           end
-        else
-          @mgr.assign!(@buffer.pop)
         end
       end
     end
 
+    def refetch
+      sleep(TIMEOUT)
+      after(0) { fetch }
+    end
+
     def fetch_required?
-      @buffer.size < 2 * BATCH 
+      @buffer.size < BATCH 
     end
 
     # Ugh.  Say hello to a bloody hack.
