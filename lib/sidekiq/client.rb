@@ -91,18 +91,28 @@ module Sidekiq
         pushed = false
         payload = batch ? self.get_payload(item) : Sidekiq.dump_json(item)
         Sidekiq.client_middleware.invoke(worker_class, payload, queue) do        
-          Sidekiq.redis do |conn|
+          Sidekiq.sqs do |conn|
             if item['at']
-              pushed = (conn.zadd('schedule', item['at'].to_s, payload) == 1)
+              raise "We are not supporting scheduling at this time with SQS"
+              #pushed = (conn.zadd('schedule', item['at'].to_s, payload) == 1)
             else
-              _, pushed = conn.multi do              
-                conn.sadd('queues', queue)
-                conn.rpush("queue:#{queue}", payload)
-              end
+              queue = conn.queues.named('queue_test_one')
+              unless batch
+                result = queue.send_message(payload)
+                pushed = !result.md5.nil?
+              else
+                results = []
+                payload.each_slice(10) { |slice| results << queue.batch_send(slice)}
+                #Just assume everything worked for now
+                pushed = true
+              end              
             end
           end
         end
         !! pushed
       end  
+    def self.enqueue_batch(klass, *args)
+      klass.perform_batch_async(*args)
+    end
   end
 end
